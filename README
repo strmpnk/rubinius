@@ -1,3 +1,10 @@
+This is an experiment in cleaning up Ruby. I'll drive it with milestones and
+Github issues. It is my experiment, yours may be different. My goal is to make
+Ruby more consistent throughout the core library by applying good
+object-oriented principles.
+
+Original README follows:
+
 1. What is Rubinius
 
 Rubinius is an implementation of the Ruby programming language.
