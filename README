@@ -3,6 +3,8 @@ Github issues. It is my experiment, yours may be different. My goal is to make
 Ruby more consistent throughout the core library by applying good
 object-oriented principles.
 
+There will be no Refinements in this experiment.
+
 Original README follows:
 
 1. What is Rubinius
