@@ -168,6 +168,22 @@ describe "C-API Kernel function" do
     end
   end
 
+  ruby_version_is "1.9" do
+    describe "rb_syserr_fail" do
+      it "raises an exception from the given error" do
+        lambda do
+          @s.rb_syserr_fail(Errno::EINVAL::Errno, "additional info")
+        end.should raise_error(Errno::EINVAL, /additional info/)
+      end
+
+      it "can take a NULL message" do
+        lambda do
+          @s.rb_syserr_fail(Errno::EINVAL::Errno, nil)
+        end.should raise_error(Errno::EINVAL)
+      end
+    end
+  end
+
   describe "rb_yield" do
     it "yields passed argument" do
       ret = nil
@@ -412,6 +428,20 @@ describe "C-API Kernel function" do
         lines = backtrace.select {|l| l =~ /#{__FILE__}/ }
         lines.should_not be_empty
       end
+    end
+  end
+
+  describe "rb_obj_method" do
+    it "returns the method object for a symbol" do
+      method = @s.rb_obj_method("test", :size)
+      method.owner.should == String
+      method.name.to_sym.should == :size
+    end
+
+    it "returns the method object for a string" do
+      method = @s.rb_obj_method("test", "size")
+      method.owner.should == String
+      method.name.to_sym.should == :size
     end
   end
 end

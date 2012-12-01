@@ -53,7 +53,7 @@ namespace rubinius {
 
       // bool is_tuple = recv->flags & mask;
 
-      Value* cmp = ops.check_type_bits(rec, rubinius::Tuple::type);
+      Value* cmp = ops.check_is_tuple(rec);
 
       BasicBlock* is_tuple = ops.new_block("is_tuple");
       BasicBlock* access =   ops.new_block("tuple_at");
@@ -82,7 +82,7 @@ namespace rubinius {
 
       Value* idx[] = {
         ConstantInt::get(ops.state()->Int32Ty, 0),
-        ConstantInt::get(ops.state()->Int32Ty, offset::tuple_field),
+        ConstantInt::get(ops.state()->Int32Ty, offset::Tuple::field),
         index
       };
 
@@ -100,7 +100,7 @@ namespace rubinius {
 
       Value* rec = i.recv();
 
-      Value* cmp = ops.check_type_bits(rec, rubinius::Tuple::type);
+      Value* cmp = ops.check_is_tuple(rec);
 
       BasicBlock* is_tuple = ops.new_block("is_tuple");
       BasicBlock* access =   ops.new_block("tuple_put");
@@ -129,7 +129,7 @@ namespace rubinius {
 
       Value* idx[] = {
         ConstantInt::get(ops.state()->Int32Ty, 0),
-        ConstantInt::get(ops.state()->Int32Ty, offset::tuple_field),
+        ConstantInt::get(ops.state()->Int32Ty, offset::Tuple::field),
         index
       };
 
@@ -175,7 +175,7 @@ namespace rubinius {
 
       Value* lidx[] = {
         ConstantInt::get(ops.state()->Int32Ty, 0),
-        ConstantInt::get(ops.state()->Int32Ty, offset::tuple_field),
+        ConstantInt::get(ops.state()->Int32Ty, offset::Tuple::field),
         lindex
       };
 
@@ -183,7 +183,7 @@ namespace rubinius {
 
       Value* ridx[] = {
         ConstantInt::get(ops.state()->Int32Ty, 0),
-        ConstantInt::get(ops.state()->Int32Ty, offset::tuple_field),
+        ConstantInt::get(ops.state()->Int32Ty, offset::Tuple::field),
         rindex
       };
 
@@ -447,6 +447,140 @@ namespace rubinius {
       i.context().leave_inline();
     }
 
+    void fixnum_div() {
+      log("fixnum_div");
+      i.context().enter_inline();
+
+      Value* recv = ops.cast_int(i.recv());
+      Value* arg = ops.cast_int(i.arg(0));
+
+      Value* anded = BinaryOperator::CreateAnd(recv, arg, "fixnums_anded",
+          ops.current_block());
+
+      Value* fix_mask = ConstantInt::get(ops.NativeIntTy, TAG_FIXNUM_MASK);
+      Value* fix_tag  = ConstantInt::get(ops.NativeIntTy, TAG_FIXNUM);
+
+      Value* masked = BinaryOperator::CreateAnd(anded, fix_mask, "masked",
+          ops.current_block());
+
+      Value* cmp = ops.create_equal(masked, fix_tag, "is_fixnum");
+
+      BasicBlock* positive = ops.new_block("check_positive");
+      BasicBlock* non_zero = ops.new_block("non_zero");
+      BasicBlock* divide = ops.new_block("divide");
+      BasicBlock* send = i.failure();
+
+      ops.create_conditional_branch(positive, send, cmp);
+
+      ops.set_block(positive);
+
+      /*
+       * Check whether both numbers are positive. Otherwise
+       * fallback to a regular send. Because of Ruby semantics, there
+       * is a difference for using negative numbers in division and remainder
+       * operations, they round down and not to 0.
+       */
+      Value* ored = BinaryOperator::CreateOr(recv, arg, "fixnums_ored",
+          ops.current_block());
+
+      Value* pos_mask = ConstantInt::get(ops.NativeIntTy,
+         1UL << (FIXNUM_WIDTH + TAG_FIXNUM_SHIFT));
+
+      Value* pos_masked = BinaryOperator::CreateAnd(ored, pos_mask, "pos_masked",
+          ops.current_block());
+
+      Value* pos_cmp = ops.create_equal(pos_masked, pos_mask, "is_positive");
+
+      /* Both high bits aren't set, so then divide direct */
+      ops.create_conditional_branch(send, non_zero, pos_cmp);
+      ops.set_block(non_zero);
+
+      Value* recv_int = ops.tag_strip(recv, ops.NativeIntTy);
+      Value* arg_int = ops.tag_strip(arg, ops.NativeIntTy);
+
+      Value* zero = ConstantInt::get(ops.NativeIntTy, 0);
+
+      Value* zero_cmp = ops.create_equal(arg_int, zero, "is_zero");
+      ops.create_conditional_branch(send, divide, zero_cmp);
+      ops.set_block(divide);
+
+      Value* div = ops.b().CreateSDiv(recv_int, arg_int, "fixnum.div");
+
+      Value* result = ops.fixnum_tag(div);
+
+      i.use_send_for_failure();
+      i.exception_safe();
+      i.set_result(ops.as_obj(result));
+      i.context().leave_inline();
+    }
+
+    void fixnum_mod() {
+      log("fixnum_mod");
+      i.context().enter_inline();
+
+      Value* recv = ops.cast_int(i.recv());
+      Value* arg = ops.cast_int(i.arg(0));
+
+      Value* anded = BinaryOperator::CreateAnd(recv, arg, "fixnums_anded",
+          ops.current_block());
+
+      Value* fix_mask = ConstantInt::get(ops.NativeIntTy, TAG_FIXNUM_MASK);
+      Value* fix_tag  = ConstantInt::get(ops.NativeIntTy, TAG_FIXNUM);
+
+      Value* masked = BinaryOperator::CreateAnd(anded, fix_mask, "masked",
+          ops.current_block());
+
+      Value* cmp = ops.create_equal(masked, fix_tag, "is_fixnum");
+
+      BasicBlock* positive = ops.new_block("check_positive");
+      BasicBlock* non_zero = ops.new_block("non_zero");
+      BasicBlock* modulo = ops.new_block("divide");
+      BasicBlock* send = i.failure();
+
+      ops.create_conditional_branch(positive, send, cmp);
+
+      ops.set_block(positive);
+
+      /*
+       * Check whether both numbers are positive. Otherwise
+       * fallback to a regular send. Because of Ruby semantics, there
+       * is a difference for using negative numbers in division and remainder
+       * operations, they round down and not to 0.
+       */
+      Value* ored = BinaryOperator::CreateOr(recv, arg, "fixnums_ored",
+          ops.current_block());
+
+      Value* pos_mask = ConstantInt::get(ops.NativeIntTy,
+          1UL << (FIXNUM_WIDTH + TAG_FIXNUM_SHIFT));
+
+      Value* pos_masked = BinaryOperator::CreateAnd(ored, pos_mask, "pos_masked",
+          ops.current_block());
+
+      Value* pos_cmp = ops.create_equal(pos_masked, pos_mask, "is_positive");
+
+      /* Both high bits aren't set, so then divide direct */
+      ops.create_conditional_branch(send, non_zero, pos_cmp);
+      ops.set_block(non_zero);
+
+      Value* recv_int = ops.tag_strip(recv, ops.NativeIntTy);
+      Value* arg_int = ops.tag_strip(arg, ops.NativeIntTy);
+
+      Value* zero = ConstantInt::get(ops.NativeIntTy, 0);
+
+      Value* zero_cmp = ops.create_equal(arg_int, zero, "is_zero");
+      ops.create_conditional_branch(send, modulo, zero_cmp);
+      ops.set_block(modulo);
+
+      Value* mod = ops.b().CreateSRem(recv_int, arg_int, "fixnum.mod");
+
+      Value* result = ops.fixnum_tag(mod);
+
+      i.use_send_for_failure();
+      i.exception_safe();
+      i.set_result(ops.as_obj(result));
+      i.context().leave_inline();
+    }
+
     void fixnum_compare() {
       log("fixnum_compare");
       i.context().enter_inline();
@@ -646,7 +780,7 @@ namespace rubinius {
       sig << "State";
 
       Function* func = sig.function("rbx_float_allocate");
-      func->setDoesNotAlias(0, true); // return value
+      func->setDoesNotAlias(0); // return value
 
       Value* call_args[] = { ops.vm() };
       CallInst* res = sig.call("rbx_float_allocate", call_args, 1, "result", ops.b());
@@ -856,8 +990,8 @@ namespace rubinius {
       i.context().leave_inline();
     }
 
-    void type_object_equal() {
-      log("type_object_equal");
+    void vm_object_equal() {
+      log("Type.object_equal");
 
       Value* cmp = ops.create_equal(i.arg(0), i.arg(1), "identity_equal");
       Value* imm_value = SelectInst::Create(cmp, ops.constant(cTrue),
@@ -884,24 +1018,75 @@ namespace rubinius {
       i.context().leave_inline();
     }
 
-    /*
-       void object_class(Class* klass, JITOperations& ops, Inliner& i) {
-       Value* self = i.recv();
+    void object_kind_of() {
+      log("Object#kind_of");
+      i.context().enter_inline();
 
-       ops.check_class(self, klass, i.failure());
+      Signature sig(ops.state(), ops.state()->ptr_type("Object"));
+      sig << "State";
+      sig << "Object";
+      sig << "Object";
 
-       Signature sig(ops.state(), "Class");
-       sig << "State";
-       sig << "Object";
+      Value* call_args[] = { ops.vm(), i.recv(), i.arg(0) };
 
-       Value* call_args[] = { ops.vm(), self };
+      Value* val = sig.call("rbx_kind_of", call_args, 3, "hash", ops.b());
 
-       Value* res = sig.call("rbx_class_of", call_args, 2, "object_class", ops.b());
+      i.exception_safe();
+      i.set_result(val);
+      i.context().leave_inline();
+    }
 
-       i.exception_safe();
-       i.set_result(ops.downcast(res));
-       }
-       */
+    void vm_object_kind_of() {
+      log("Type.object_kind_of");
+      i.context().enter_inline();
+
+      Signature sig(ops.state(), ops.state()->ptr_type("Object"));
+      sig << "State";
+      sig << "Object";
+      sig << "Object";
+
+      Value* call_args[] = { ops.vm(), i.arg(0), i.arg(1) };
+
+      Value* val = sig.call("rbx_kind_of", call_args, 3, "hash", ops.b());
+
+      i.exception_safe();
+      i.set_result(val);
+      i.context().leave_inline();
+    }
+
+    void object_class() {
+      log("Object#class");
+      i.context().enter_inline();
+
+      Signature sig(ops.state(), ops.state()->ptr_type("Object"));
+      sig << "State";
+      sig << "Object";
+
+      Value* call_args[] = { ops.vm(), i.recv() };
+
+      Value* val = sig.call("rbx_class_of", call_args, 2, "object_class", ops.b());
+
+      i.exception_safe();
+      i.set_result(val);
+      i.context().leave_inline();
+    }
+
+    void vm_object_class() {
+      log("Type.object_class");
+      i.context().enter_inline();
+
+      Signature sig(ops.state(), ops.state()->ptr_type("Object"));
+      sig << "State";
+      sig << "Object";
+
+      Value* call_args[] = { ops.vm(), i.arg(0) };
+
+      Value* val = sig.call("rbx_class_of", call_args, 2, "object_class", ops.b());
+
+      i.exception_safe();
+      i.set_result(val);
+      i.context().leave_inline();
+    }
 
   };
 
@@ -923,6 +1108,10 @@ namespace rubinius {
       ip.fixnum_compare();
     } else if(prim == Primitives::fixnum_mul && count_ == 1) {
       ip.fixnum_mul();
+    } else if(prim == Primitives::fixnum_div && count_ == 1) {
+      ip.fixnum_div();
+    } else if(prim == Primitives::fixnum_mod && count_ == 1) {
+      ip.fixnum_mod();
     } else if(prim == Primitives::fixnum_equal && count_ == 1) {
       ip.fixnum_compare_operation(cEqual);
     } else if(prim == Primitives::fixnum_lt && count_ == 1) {
@@ -935,6 +1124,16 @@ namespace rubinius {
       ip.fixnum_compare_operation(cGreaterThanEqual);
     } else if(prim == Primitives::object_equal && count_ == 1) {
       ip.object_equal();
+    } else if(prim == Primitives::vm_object_equal && count_ == 2) {
+      ip.vm_object_equal();
+    } else if(prim == Primitives::object_kind_of && count_ == 1) {
+      ip.object_kind_of();
+    } else if(prim == Primitives::vm_object_kind_of && count_ == 2) {
+      ip.vm_object_kind_of();
+    } else if(prim == Primitives::object_class && count_ == 0) {
+      ip.object_class();
+    } else if(prim == Primitives::vm_object_class && count_ == 1) {
+      ip.vm_object_class();
     } else if(prim == Primitives::float_add && count_ == 1) {
       ip.float_op(cAdd);
     } else if(prim == Primitives::float_sub && count_ == 1) {
@@ -966,9 +1165,6 @@ namespace rubinius {
       if(!ip.static_symbol_s_eqq()) {
         ip.symbol_s_eqq();
       }
-
-    } else if(prim == Primitives::vm_object_equal && count_ == 2) {
-      ip.type_object_equal();
 
     } else if(prim == Primitives::class_allocate && count_ == 0) {
       ip.class_allocate();
@@ -1033,10 +1229,10 @@ namespace rubinius {
           }
 
           Function* func = sig.function(stub_res.name());
-          func->setDoesNotCapture(1, true);
+          func->setDoesNotCapture(1);
 
           if(stub_res.pass_callframe()) {
-            func->setDoesNotCapture(2, true);
+            func->setDoesNotCapture(2);
           }
 
           Value* res = sig.call(stub_res.name(), call_args, "prim_value", ops_.b());

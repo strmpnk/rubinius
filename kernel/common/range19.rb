@@ -7,20 +7,33 @@ class Range
 
   alias_method :cover?, :include?
 
-  def max(&block)
-    raise TypeError, "cannot exclude non Integer end value" if @end.kind_of?(Float) && @excl
+  def first(n=undefined)
+    n.equal?(undefined) ? @begin : super
+  end
 
-    return super(&block) if block_given?
-    return nil if @end < @begin || (@excl && @end == @begin)
-    return @end if @end.kind_of?(Float) || (!@end.kind_of?(Float) && !@excl)
-    super
+  def max(&block)
+    return super(&block) if block_given? || (@excl && !@end.kind_of?(Numeric))
+    return nil unless @end > @begin
+
+    if @excl
+      unless @end.kind_of?(Integer)
+        raise TypeError, "cannot exclude non Integer end value" 
+      end
+
+      unless @begin.kind_of?(Integer)
+        raise TypeError, "cannot exclude end value with non Integer begin value" 
+      end
+
+      return @end - 1
+    end
+
+    @end
   end
 
   def min(&block)
     return super(&block) if block_given?
     return nil if @end < @begin || (@excl && @end == @begin)
-    return @begin if @begin.kind_of?(Float)
-    super
+    @begin
   end
 
   protected

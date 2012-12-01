@@ -8,6 +8,7 @@
 
 #include "llvm/stack_args.hpp"
 
+#include "builtin/alias.hpp"
 #include "builtin/methodtable.hpp"
 #include "builtin/nativefunction.hpp"
 #include "builtin/lookuptable.hpp"
@@ -58,7 +59,7 @@ namespace rubinius {
 
         Value* execute_pos_idx[] = {
           ops_.state()->cint(0),
-          ops_.state()->cint(offset::ic_execute),
+          ops_.state()->cint(offset::InlineCache::execute),
         };
 
         Value* execute_pos = ops_.b().CreateGEP(cache_const,
@@ -116,6 +117,10 @@ namespace rubinius {
           << ". Inliner error, method missing.\n";
       }
       return false;
+    }
+
+    if(Alias* alias = try_as<Alias>(meth)) {
+      meth = alias->original_exec();
     }
 
     if(AccessVariable* acc = try_as<AccessVariable>(meth)) {
@@ -651,7 +656,6 @@ remember:
       case RBX_FFI_TYPE_DOUBLE:
         return ops_.state()->DoubleTy;
 
-      case RBX_FFI_TYPE_OBJECT:
       case RBX_FFI_TYPE_STRING:
       case RBX_FFI_TYPE_STRPTR:
       case RBX_FFI_TYPE_PTR:
@@ -667,11 +671,14 @@ remember:
   bool Inliner::inline_ffi(Class* klass, NativeFunction* nf) {
 
     for(size_t i = 0; i < nf->ffi_data->arg_count; i++) {
-        if(nf->ffi_data->args_info[i].type==RBX_FFI_TYPE_ENUM || nf->ffi_data->args_info[i].type==RBX_FFI_TYPE_CALLBACK) {
+        if(nf->ffi_data->args_info[i].type==RBX_FFI_TYPE_ENUM ||
+           nf->ffi_data->args_info[i].type==RBX_FFI_TYPE_CALLBACK ||
+           nf->ffi_data->args_info[i].type == RBX_FFI_TYPE_VARARGS) {
             return false;
         }
     }
-    if(nf->ffi_data->ret_info.type==RBX_FFI_TYPE_ENUM || nf->ffi_data->ret_info.type==RBX_FFI_TYPE_CALLBACK) {
+    if(nf->ffi_data->ret_info.type==RBX_FFI_TYPE_ENUM ||
+       nf->ffi_data->ret_info.type==RBX_FFI_TYPE_CALLBACK) {
         return false;
     }
 
@@ -788,16 +795,6 @@ remember:
         ops_.set_block(cont);
         break;
       }
-
-      case RBX_FFI_TYPE_STATE:
-        ffi_type.push_back(ops_.vm()->getType());
-        ffi_args.push_back(ops_.vm());
-        break;
-
-      case RBX_FFI_TYPE_OBJECT:
-        ffi_type.push_back(current_arg->getType());
-        ffi_args.push_back(current_arg);
-        break;
 
       case RBX_FFI_TYPE_PTR: {
         Type* type = llvm::PointerType::getUnqual(ops_.state()->Int8Ty);
@@ -940,10 +937,6 @@ remember:
                         ops_.b());
       break;
     }
-
-    case RBX_FFI_TYPE_OBJECT:
-      result = ffi_result;
-      break;
 
     case RBX_FFI_TYPE_STRING: {
       Signature sig(ops_.state(), ops_.ObjType);

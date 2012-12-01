@@ -51,6 +51,12 @@ class BasicSocket < IO
 
     error = 0
 
+    sockname = Socket::Foreign.getsockname descriptor
+    family = Socket::Foreign.getnameinfo(sockname).first
+
+    level = level_arg(family, level)
+    optname = optname_arg(level, optname)
+
     case optval
     when Fixnum then
       FFI::MemoryPointer.new :socklen_t do |val|
@@ -163,6 +169,77 @@ class BasicSocket < IO
   def shutdown(how = 2)
     err = Socket::Foreign.shutdown @descriptor, how
     Errno.handle "shutdown" unless err == 0
+  end
+
+  private
+
+  def level_arg(family, level)
+    case level
+    when Symbol, String
+      if Socket::Constants.const_defined?(level)
+        Socket::Constants.const_get(level)
+      else
+        if is_ip_family?(family)
+          ip_level_to_int(level)
+        else
+          unknown_level_to_int(level)
+        end
+      end
+    else
+      level
+    end
+  end
+
+  def optname_arg(level, optname)
+    case optname
+    when Symbol, String
+      if Socket::Constants.const_defined?(optname)
+        Socket::Constants.const_get(optname)
+      else
+        case(level)
+        when Socket::Constants::SOL_SOCKET
+          constant("SO", optname)
+        when Socket::Constants::IPPROTO_IP
+          constant("IP", optname)
+        when Socket::Constants::IPPROTO_TCP
+          constant("TCP", optname)
+        when Socket::Constants::IPPROTO_UDP
+          constant("UDP", optname)
+        else
+          if Socket::Constants.const_defined?(Socket::Constants::IPPROTO_IPV6) &&
+            level == Socket::Constants::IPPROTO_IPV6
+            constant("IPV6", optname)
+          else
+            optname
+          end
+        end
+      end
+    else
+      optname
+    end
+  end
+
+  def is_ip_family?(family)
+    family == "AF_INET" || family == "AF_INET6"
+  end
+
+  def ip_level_to_int(level)
+    prefixes = ["IPPROTO", "SOL"]
+    prefixes.each do |prefix|
+      if Socket::Constants.const_defined?("#{prefix}_#{level}")
+        return Socket::Constants.const_get("#{prefix}_#{level}")
+      end
+    end
+  end
+
+  def unknown_level_to_int(level)
+    constant("SOL", level)
+  end
+
+  def constant(prefix, suffix)
+    if Socket::Constants.const_defined?("#{prefix}_#{suffix}")
+      Socket::Constants.const_get("#{prefix}_#{suffix}")
+    end
   end
 
 end
@@ -672,17 +749,7 @@ class Socket < BasicSocket
       end
     end
 
-    if type.kind_of? String
-      if type.prefix? "SOCK_"
-        begin
-          type = Socket::Constants.const_get(type)
-        rescue NameError
-          raise SocketError, "unknown socket type #{type}"
-        end
-      else
-        raise SocketError, "unknown socket type #{type}"
-      end
-    end
+    type = get_socket_type(type)
 
     FFI::MemoryPointer.new :int, 2 do |mp|
       Socket::Foreign.socketpair(domain, type, protocol, mp)
@@ -720,9 +787,10 @@ class Socket < BasicSocket
     end
   end
 
-  def initialize(family, socket_type, protocol)
+  def initialize(family, socket_type, protocol=0)
     @no_reverse_lookup = self.class.do_not_reverse_lookup
-    descriptor = Socket::Foreign.socket family, socket_type, protocol
+    socket_type = self.class.get_socket_type(socket_type)
+    descriptor  = Socket::Foreign.socket family, socket_type, protocol
 
     Errno.handle 'socket(2)' if descriptor < 0
 
@@ -765,6 +833,30 @@ class Socket < BasicSocket
     end
 
     return status
+  end
+
+  def self.get_socket_type(type)
+    if type.kind_of? String
+      if type.prefix? "SOCK_"
+        begin
+          type = Socket::Constants.const_get(type)
+        rescue NameError
+          raise SocketError, "unknown socket type #{type}"
+        end
+      else
+        raise SocketError, "unknown socket type #{type}"
+      end
+    end
+
+    if type.kind_of? Symbol
+      begin
+        type = Socket::Constants.const_get("SOCK_#{type}")
+      rescue NameError
+        raise SocketError, "unknown socket type #{type}"
+      end
+    end
+
+    type
   end
 end
 
@@ -1036,8 +1128,14 @@ class TCPSocket < IPSocket
                 local_service = nil, server = false)
     status = nil
     syscall = nil
-    remote_host    = remote_host.to_s    if remote_host
-    remote_service = remote_service.to_s if remote_service
+    remote_host    = StringValue(remote_host)    if remote_host
+    if remote_service
+      if remote_service.kind_of? Fixnum
+        remote_service = remote_service.to_s
+      else
+        remote_service = StringValue(remote_service)
+      end
+    end
 
     flags = server ? Socket::AI_PASSIVE : 0
     @remote_addrinfo = Socket::Foreign.getaddrinfo(remote_host,

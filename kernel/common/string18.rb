@@ -5,6 +5,10 @@ class String
 
   alias_method :bytesize, :size
 
+  def inspect
+    "\"#{transform(Rubinius::CType::Printed, true)}\""
+  end
+
   def upto(stop, exclusive=false)
     stop = StringValue(stop)
     return self if self > stop
@@ -601,81 +605,136 @@ class String
     return match_data
   end
 
-  def []=(index, replacement, three=undefined)
-    unless three.equal?(undefined)
-      if index.kind_of? Regexp
-        subpattern_set index,
-                       Rubinius::Type.coerce_to(replacement, Integer, :to_int),
-                       three
-      else
-        start = Rubinius::Type.coerce_to(index, Integer, :to_int)
-        fin =   Rubinius::Type.coerce_to(replacement, Integer, :to_int)
-
-        splice! start, fin, three
-      end
-
-      return three
+  def []=(index, count_or_replacement, replacement=undefined)
+    if replacement.equal? undefined
+      replacement = count_or_replacement
+      count = nil
+    else
+      count = count_or_replacement
     end
 
     case index
     when Fixnum
-      # Handle this first because it's the most common.
-      # This is duplicated from the else branch, but don't dry it up.
-      if index < 0
-        index += @num_bytes
+      index += @num_bytes if index < 0
+
+      if count
+        if index < 0 or index > @num_bytes
+          raise IndexError, "index #{index} out of string"
+        end
+
+        count = Rubinius::Type.coerce_to count, Fixnum, :to_int
+
+        if count < 0
+          raise IndexError, "count is negative"
+        end
+
+        count = @num_bytes - index if count >= @num_bytes
+      else
         if index < 0 or index >= @num_bytes
           raise IndexError, "index #{index} out of string"
         end
-      else
-        raise IndexError, "index #{index} out of string" if index >= @num_bytes
       end
 
-      if replacement.kind_of?(Fixnum)
+      if not count and replacement.kind_of? Fixnum
         modify!
         @data[index] = replacement
       else
-        splice! index, 1, replacement
+        splice! index, count || 1, replacement
       end
-    when Regexp
-      subpattern_set index, 0, replacement
     when String
       unless start = self.index(index)
         raise IndexError, "string not matched"
       end
 
-      splice! start, index.length, replacement
+      splice! start, index.bytesize, replacement
     when Range
-      start   = Rubinius::Type.coerce_to(index.first, Integer, :to_int)
-      length  = Rubinius::Type.coerce_to(index.last, Integer, :to_int)
+      start = Rubinius::Type.coerce_to index.first, Fixnum, :to_int
 
       start += @num_bytes if start < 0
 
-      return nil if start < 0 || start > @num_bytes
-
-      length = @num_bytes if length > @num_bytes
-      length += @num_bytes if length < 0
-      length += 1 unless index.exclude_end?
-
-      length = length - start
-      length = 0 if length < 0
-
-      splice! start, length, replacement
-    else
-      index = Rubinius::Type.coerce_to(index, Integer, :to_int)
-      raise IndexError, "index #{index} out of string" if @num_bytes <= index
-
-      if index < 0
-        raise IndexError, "index #{index} out of string" if -index > @num_bytes
-        index += @num_bytes
+      if start < 0 or start > @num_bytes
+        raise RangeError, "#{index.first} is out of range"
       end
 
-      if replacement.kind_of?(Fixnum)
-        modify!
-        @data[index] = replacement
+      stop = Rubinius::Type.coerce_to index.last, Fixnum, :to_int
+      stop += @num_bytes if stop < 0
+      stop -= 1 if index.exclude_end?
+
+      if stop < start
+        bytes = 0
+      elsif stop >= @num_bytes
+        bytes = @num_bytes - start
       else
-        splice! index, 1, replacement
+        bytes = stop + 1 - start
+      end
+
+      splice! start, bytes, replacement
+    when Regexp
+      if count
+        count = Rubinius::Type.coerce_to count, Fixnum, :to_int
+      end
+
+      subpattern_set index, count || 0, replacement
+    else
+      index = Rubinius::Type.coerce_to index, Fixnum, :to_int
+
+      if count
+        self[index, count] = replacement
+      else
+        self[index] = replacement
       end
     end
+
     return replacement
   end
+
+  def center(width, padstr = " ")
+    justify width, :center, padstr
+  end
+
+  def ljust(width, padstr=" ")
+    justify(width, :left, padstr)
+  end
+
+  def rjust(width, padstr = " ")
+    justify(width, :right, padstr)
+  end
+
+  def justify(width, direction, padstr=" ")
+    padstr = StringValue(padstr)
+    raise ArgumentError, "zero width padding" if padstr.size == 0
+
+    width = Rubinius::Type.coerce_to width, Fixnum, :to_int
+    if width > @num_bytes
+      padsize = width - @num_bytes
+    else
+      return dup
+    end
+
+    str = self.class.pattern(1, "\0") * (padsize + @num_bytes)
+    str.taint if tainted? or padstr.tainted?
+
+    case direction
+    when :right
+      pad = String.pattern padsize, padstr
+      str.copy_from pad, 0, padsize, 0
+      str.copy_from self, 0, @num_bytes, padsize
+    when :left
+      pad = String.pattern padsize, padstr
+      str.copy_from self, 0, @num_bytes, 0
+      str.copy_from pad, 0, padsize, @num_bytes
+    when :center
+      half = padsize / 2.0
+      lsize = half.floor
+      rsize = half.ceil
+      lpad = String.pattern lsize, padstr
+      rpad = String.pattern rsize, padstr
+      str.copy_from lpad, 0, lsize, 0
+      str.copy_from self, 0, @num_bytes, lsize
+      str.copy_from rpad, 0, rsize, lsize + @num_bytes
+    end
+
+    str
+  end
+
 end

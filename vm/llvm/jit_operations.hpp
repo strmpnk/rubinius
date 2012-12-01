@@ -21,7 +21,11 @@
 #include <llvm/Value.h>
 #include <llvm/BasicBlock.h>
 #include <llvm/Function.h>
+#if RBX_LLVM_API_VER >= 302
+#include <llvm/IRBuilder.h>
+#else
 #include <llvm/Support/IRBuilder.h>
+#endif
 #include <llvm/CallingConv.h>
 
 using namespace llvm;
@@ -153,7 +157,7 @@ namespace rubinius {
       out_args_block_= ptr_gep(out_args_, 2, "out_args_block");
       out_args_total_= ptr_gep(out_args_, 3, "out_args_total");
       out_args_arguments_ = ptr_gep(out_args_, 4, "out_args_arguments");
-      out_args_container_ = ptr_gep(out_args_, offset::args_container,
+      out_args_container_ = ptr_gep(out_args_, offset::Arguments::argument_container,
                                     "out_args_container");
     }
 
@@ -187,8 +191,8 @@ namespace rubinius {
       inline_policy_ = policy;
     }
 
-    void init_policy() {
-      inline_policy_ = InlinePolicy::create_policy(machine_code());
+    void init_policy(LLVMState* state) {
+      inline_policy_ = InlinePolicy::create_policy(state, machine_code());
       own_policy_ = true;
     }
 
@@ -330,7 +334,7 @@ namespace rubinius {
     }
 
     Value* get_class_id(Value* cls) {
-      Value* idx[] = { zero_, cint(offset::class_class_id) };
+      Value* idx[] = { zero_, cint(offset::Class::class_id) };
       Value* gep = create_gep(cls, idx, 2, "class_id_pos");
       return create_load(gep, "class_id");
     }
@@ -701,7 +705,7 @@ namespace rubinius {
 
     // Scope maintenance
     void flush_scope_to_heap(Value* vars) {
-      Value* pos = b().CreateConstGEP2_32(vars, 0, offset::vars_on_heap,
+      Value* pos = b().CreateConstGEP2_32(vars, 0, offset::StackVariables::on_heap,
                                      "on_heap_pos");
 
       Value* on_heap = b().CreateLoad(pos, "on_heap");
@@ -850,7 +854,7 @@ namespace rubinius {
     Value* get_tuple_size(Value* tup) {
       Value* idx[] = {
         zero_,
-        cint(offset::tuple_full_size)
+        cint(offset::Tuple::full_size)
       };
 
       Value* pos = create_gep(tup, idx, 2, "table_size_pos");

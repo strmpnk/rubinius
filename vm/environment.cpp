@@ -10,6 +10,7 @@
 
 #include "builtin/array.hpp"
 #include "builtin/class.hpp"
+#include "builtin/encoding.hpp"
 #include "builtin/exception.hpp"
 #include "builtin/string.hpp"
 #include "builtin/symbol.hpp"
@@ -52,6 +53,7 @@
 #include <dlfcn.h>
 #endif
 #include <fcntl.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/param.h>
@@ -72,14 +74,15 @@ namespace rubinius {
   // Used by the segfault reporter. Calculated up front to avoid
   // crashing inside the crash handler.
   static struct utsname machine_info;
-  static char report_path[1024];
-  static const char* report_file_name = ".rubinius_last_error";
+  static char report_path[PATH_MAX];
+  static const char* report_file_name = "rubinius_last_error";
 
   Environment::Environment(int argc, char** argv)
     : argc_(argc)
     , argv_(argv)
     , signature_(0)
     , version_(0)
+    , sig_handler_(NULL)
   {
 #ifdef ENABLE_LLVM
     if(!llvm::llvm_start_multithreaded()) {
@@ -105,17 +108,22 @@ namespace rubinius {
 
     // Calculate the report_path
     if(char* home = getenv("HOME")) {
-      char* path = report_path;
+      snprintf(report_path, PATH_MAX, "%s/.rbx", home);
 
-      memcpy(path, home, strlen(home));
-      path += strlen(home);
+      pid_t pid = getpid();
 
-      *path++ = '/';
-
-      memcpy(path, report_file_name, strlen(report_file_name));
-      path += strlen(report_file_name);
-
-      *path = 0;
+      bool use_dir = false;
+      struct stat s;
+      if(stat(report_path, &s) != 0) {
+        if(mkdir(report_path, S_IRWXU) == 0) use_dir = true;
+      } else if(S_ISDIR(s.st_mode)) {
+        use_dir = true;
+      }
+      if(use_dir) {
+        snprintf(report_path, PATH_MAX, "%s/%s_%d", report_path, report_file_name, pid);
+      } else {
+        snprintf(report_path, PATH_MAX, "%s/.%s_%d", home, report_file_name, pid);
+      }
     } else {
       // We check and ignore the report_path if it's 'empty'
       report_path[0] = 0;
@@ -355,8 +363,7 @@ namespace rubinius {
         e = b;
         while(*e && !isspace(*e)) e++;
 
-        int len;
-        if((len = e - b) > 0) {
+        if(e - b > 0) {
           if(strncmp(b, "-X", 2) == 0) {
             *e = 0;
             config_parser.import_line(b + 2);
@@ -392,18 +399,26 @@ namespace rubinius {
   }
 
   void Environment::load_argv(int argc, char** argv) {
+    String* str = 0;
+    Encoding* enc = Encoding::default_external(state);
+
     Array* os_ary = Array::create(state, argc);
     for(int i = 0; i < argc; i++) {
-      os_ary->set(state, i, String::create(state, argv[i]));
+      str = String::create(state, argv[i]);
+      str->encoding(state, enc);
+      os_ary->set(state, i, str);
     }
 
     G(rubinius)->set_const(state, "OS_ARGV", os_ary);
 
     char buf[MAXPATHLEN];
-    G(rubinius)->set_const(state, "OS_STARTUP_DIR",
-        String::create(state, getcwd(buf, MAXPATHLEN)));
+    str = String::create(state, getcwd(buf, MAXPATHLEN));
+    str->encoding(state, enc);
+    G(rubinius)->set_const(state, "OS_STARTUP_DIR", str);
 
-    state->vm()->set_const("ARG0", String::create(state, argv[0]));
+    str = String::create(state, argv[0]);
+    str->encoding(state, enc);
+    state->vm()->set_const("ARG0", str);
 
     Array* ary = Array::create(state, argc - 1);
     int which_arg = 0;
@@ -420,7 +435,10 @@ namespace rubinius {
         skip_xflags = false;
       }
 
-      ary->set(state, which_arg++, String::create(state, arg)->taint(state));
+      str = String::create(state, arg);
+      str->taint(state);
+      str->encoding(state, enc);
+      ary->set(state, which_arg++, str);
     }
 
     state->vm()->set_const("ARGV", ary);
@@ -515,8 +533,8 @@ namespace rubinius {
     state->vm()->initialize_as_root();
   }
 
-  static std::stringstream stream;
   void Environment::run_file(std::string path) {
+    std::stringstream stream;
     std::ifstream file(path.c_str(), std::ios::ate|std::ios::binary);
 
     if(!file) {
@@ -529,7 +547,6 @@ namespace rubinius {
     std::vector<char> buffer(length);
     file.seekg(0, std::ios::beg);
     file.read(&buffer[0], length);
-    stream.clear();
     stream.rdbuf()->pubsetbuf(&buffer[0], length);
 
     CompiledFile* cf = CompiledFile::load(stream);
@@ -884,16 +901,18 @@ namespace rubinius {
 
     Object* loader = G(rubinius)->get_const(state, state->symbol("Loader"));
     if(loader->nil_p()) {
-      std::cout << "Unable to find loader!\n";
-      exit(127);
+      rubinius::bug("Unable to find loader");
     }
 
     OnStack<1> os(state, loader);
 
     Object* inst = loader->send(state, 0, state->symbol("new"));
+    if(inst) {
+      OnStack<1> os2(state, inst);
 
-    OnStack<1> os2(state, inst);
-
-    inst->send(state, 0, state->symbol("main"));
+      inst->send(state, 0, state->symbol("main"));
+    } else {
+      rubinius::bug("Unable to instantiate loader");
+    }
   }
 }

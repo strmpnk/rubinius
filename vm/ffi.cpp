@@ -32,8 +32,8 @@
 namespace rubinius {
 
   void VM::init_ffi(STATE) {
-    Module* mod = ontology::new_module(state, "FFI");
-    mod->set_const(state, "TYPE_OBJECT",     Fixnum::from(RBX_FFI_TYPE_OBJECT));
+    GO(ffi).set(ontology::new_module(state, "FFI"));
+    Module* mod = G(ffi);
     mod->set_const(state, "TYPE_CHAR",       Fixnum::from(RBX_FFI_TYPE_CHAR));
     mod->set_const(state, "TYPE_UCHAR",      Fixnum::from(RBX_FFI_TYPE_UCHAR));
     mod->set_const(state, "TYPE_BOOL",       Fixnum::from(RBX_FFI_TYPE_BOOL));
@@ -50,8 +50,9 @@ namespace rubinius {
     mod->set_const(state, "TYPE_PTR",        Fixnum::from(RBX_FFI_TYPE_PTR));
     mod->set_const(state, "TYPE_VOID",       Fixnum::from(RBX_FFI_TYPE_VOID));
     mod->set_const(state, "TYPE_STRING",     Fixnum::from(RBX_FFI_TYPE_STRING));
-    mod->set_const(state, "TYPE_STATE",      Fixnum::from(RBX_FFI_TYPE_STATE));
     mod->set_const(state, "TYPE_STRPTR",     Fixnum::from(RBX_FFI_TYPE_STRPTR));
     mod->set_const(state, "TYPE_CHARARR",    Fixnum::from(RBX_FFI_TYPE_CHARARR));
+    mod->set_const(state, "TYPE_ENUM",       Fixnum::from(RBX_FFI_TYPE_ENUM));
+    mod->set_const(state, "TYPE_VARARGS",    Fixnum::from(RBX_FFI_TYPE_VARARGS));
   }
 };

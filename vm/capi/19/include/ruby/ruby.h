@@ -427,6 +427,8 @@ struct RFile {
 
 #define rb_rs           mri_global_rb_rs()
 #define rb_default_rs   mri_global_rb_default_rs()
+#define rb_output_rs    mri_global_rb_output_rs()
+#define rb_output_fs    mri_global_rb_output_fs()
 
 /* Global Class objects */
 
@@ -690,6 +692,8 @@ VALUE rb_uint2big(unsigned long number);
 
 /** Return an integer type id for the object. @see rb_type() */
 #define TYPE(handle)      rb_type(handle)
+#define rb_type_p(obj, type) (rb_type(obj) == (type))
+#define RB_TYPE_P(obj, type) rb_type_p(obj, type)
 
 /** Alias to rb_type. This is not exactly the same as in MRI, but it makes sure
 + * that it won't segfault if you give BUILTIN_TYPE an immediate such as a Fixnum
@@ -738,12 +742,6 @@ VALUE rb_uint2big(unsigned long number);
 
   /** Retrieve a Handle to a globally available object. @internal. */
   VALUE   capi_get_constant(CApiConstant type);
-
-  /** Get the current value of the record separator. @internal. */
-  VALUE   capi_get_rb_rs();
-
-  /** Get the value of the default record separator. @internal. */
-  VALUE   capi_get_rb_default_rs();
 
   /** Returns the string associated with a symbol. */
   const char *rb_id2name(ID sym);
@@ -889,6 +887,9 @@ VALUE rb_uint2big(unsigned long number);
   /** Store object at given index. Supports negative indexes. Returns object. */
   void    rb_ary_store(VALUE self, long int index, VALUE object);
 
+  /** Concat two arrays */
+  VALUE   rb_ary_concat(VALUE self, VALUE second);
+
   /** Add object to the front of Array. Changes old indexes +1. Returns object. */
   VALUE   rb_ary_unshift(VALUE self, VALUE object);
 
@@ -943,7 +944,6 @@ VALUE rb_uint2big(unsigned long number);
   double  rb_big2dbl(VALUE obj);
 
   int     rb_big_bytes_used(VALUE obj);
-#define RBIGNUM_LEN(obj) rb_big_bytes_used(obj)
 
   int rb_big_sign(VALUE obj);
 #define RBIGNUM_SIGN(obj) rb_big_sign(obj)
@@ -972,6 +972,7 @@ VALUE rb_uint2big(unsigned long number);
 # define BDIGIT_DBL_SIGNED long
 #endif
 
+#define RBIGNUM_LEN(obj) (rb_big_bytes_used(obj) / SIZEOF_BDIGITS)
   /** Calls this method in a superclass. */
   VALUE rb_call_super(int argc, const VALUE *argv);
 
@@ -1211,6 +1212,9 @@ VALUE rb_uint2big(unsigned long number);
   /** Taint an object and return it */
   VALUE rb_obj_taint(VALUE obj);
 
+  /** Returns Method object for given method name */
+  VALUE rb_obj_method(VALUE self, VALUE method);
+
   /** Returns a string formatted with Kernel#sprintf. */
   VALUE rb_f_sprintf(int argc, const VALUE* argv);
 
@@ -1247,6 +1251,7 @@ VALUE rb_uint2big(unsigned long number);
 
   VALUE rb_exec_recursive(VALUE (*func)(VALUE, VALUE, int),
                           VALUE obj, VALUE arg);
+#define HAVE_RB_EXEC_RECURSIVE 1
 
   /** @todo define rb_funcall3, which is the same as rb_funcall2 but
    * will not call private methods.
@@ -1315,6 +1320,8 @@ VALUE rb_uint2big(unsigned long number);
   void    rb_thread_wait_fd(int fd);
   void    rb_thread_fd_writable(int fd);
   void    rb_thread_wait_for(struct timeval time);
+#define rb_thread_create(func, arg) capi_thread_create(func, arg, #func, __FILE__)
+  VALUE   capi_thread_create(VALUE (*)(ANYARGS), void*, const char* name, const char* file);
 
   /** Mark ruby object ptr. */
   void    rb_gc_mark(VALUE ptr);
@@ -1330,6 +1337,12 @@ VALUE rb_uint2big(unsigned long number);
 
   /** Yet another way to request to run the GC */
   void    rb_gc();
+
+  /** Request to enable GC (is always enabled in Rubinius anyway) */
+  VALUE   rb_gc_enable();
+
+  /** Request to disable GC (doesn't actually happen) */
+  VALUE   rb_gc_disable();
 
   /** Mark variable global. Will not be GC'd. */
 #define rb_global_variable(address)   capi_gc_register_address(address, __FILE__, __LINE__)
@@ -1488,6 +1501,18 @@ VALUE rb_uint2big(unsigned long number);
    * Break from iteration
    */
   NORETURN(void rb_iter_break(void));
+
+  /**
+   * Return the last Ruby source file in the backtrace
+   */
+  const char* rb_sourcefile();
+#define HAVE_RB_SOURCEFILE 1
+
+  /**
+   * Return the line of the last Ruby code in the backtrace
+   */
+  int rb_sourceline();
+#define HAVE_RB_SOURCELINE 1
 
   /**
    * Continue raising a pending exception if status is not 0
@@ -1775,6 +1800,9 @@ VALUE rb_uint2big(unsigned long number);
   /** Raises an exception from the value of errno. */
   NORETURN(void rb_sys_fail(const char* mesg));
 
+  /** Raises an exception from the value of the given errno. */
+  NORETURN(void rb_syserr_fail(int err, const char* mesg));
+
   /** Evaluate the given string. */
   VALUE   rb_eval_string(const char* string);
 
@@ -1839,6 +1867,12 @@ VALUE rb_uint2big(unsigned long number);
   /** Get the value of the default record separator. @internal. */
   VALUE   mri_global_rb_default_rs();
 
+  /** Get the value of the output record separator */
+  VALUE   mri_global_rb_output_rs();
+
+  /** Get the value of the output field separator */
+  VALUE   mri_global_rb_output_fs();
+
   void    rb_lastline_set(VALUE obj);
 
   VALUE   rb_lastline_get(void);
@@ -1850,7 +1884,8 @@ VALUE rb_uint2big(unsigned long number);
 #define RUBY_UBF_PROCESS ((rb_unblock_function_t *)-1)
 
   /** Return a new time object based on the given offset from the epoch */
-  VALUE   rb_time_new(time_t sec, time_t usec);
+  VALUE   rb_time_new(time_t sec, long usec);
+  VALUE   rb_time_nano_new(time_t sec, long nsec);
 
   /** Returns an integer value representing the object's type. */
   int     rb_type(VALUE object);

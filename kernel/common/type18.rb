@@ -55,5 +55,35 @@ module Rubinius
 
       obj
     end
+
+    def self.object_initialize_dup(obj, copy)
+      Rubinius.privately do
+        copy.initialize_copy obj
+      end
+    end
+
+    def self.object_initialize_clone(obj, copy)
+      Rubinius.privately do
+        copy.initialize_copy obj
+      end
+    end
+
+    def self.binary_string(string)
+      string
+    end
+
+    def self.external_string(string)
+      string
+    end
+
+    def self.encode_string(string, enc)
+      string
+    end
+
+    def self.ascii_compatible_encoding(string)
+    end
+
+    def self.compatible_encoding(a, b)
+    end
   end
 end

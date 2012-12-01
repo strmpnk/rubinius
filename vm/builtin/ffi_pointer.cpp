@@ -37,8 +37,7 @@
 namespace rubinius {
 
   void Pointer::init(STATE) {
-    Module* ffi = as<Module>(G(object)->get_const(state, "FFI"));
-    GO(ffi_pointer).set(ontology::new_class_under(state, "Pointer", ffi));
+    GO(ffi_pointer).set(ontology::new_class_under(state, "Pointer", G(ffi)));
     G(ffi_pointer)->set_object_type(state, PointerType);
 
     G(ffi_pointer)->set_const(state, "CURRENT_PROCESS",
@@ -67,7 +66,7 @@ namespace rubinius {
   #endif
 #endif
 
-    ffi->set_const(state, "LIB_SUFFIXES", suffix);
+    G(ffi)->set_const(state, "LIB_SUFFIXES", suffix);
 
     // Legacy. Fix the kernel to not need this.
     String* main_suffix;
@@ -329,9 +328,6 @@ namespace rubinius {
     case RBX_FFI_TYPE_ULONG_LONG:
       ret = Integer::from(state, READ(unsigned long long));
       break;
-    case RBX_FFI_TYPE_OBJECT:
-      ret = READ(Object*);
-      break;
     case RBX_FFI_TYPE_PTR: {
       void *lptr = READ(void*);
       if(!lptr) {
@@ -389,7 +385,7 @@ namespace rubinius {
 
     ptr += offset;
 
-#define WRITE(type, val) *((type*)ptr) = (type)val
+#define WRITE(type, val) *(reinterpret_cast<type*>(ptr)) = (type)val
 
     switch(type) {
     case RBX_FFI_TYPE_CHAR:
@@ -470,9 +466,6 @@ namespace rubinius {
         type_assert(state, val, BignumType, "converting to unsigned long long");
         WRITE(unsigned long long, as<Bignum>(val)->to_ulong_long());
       }
-      break;
-    case RBX_FFI_TYPE_OBJECT:
-      WRITE(Object*, val);
       break;
     case RBX_FFI_TYPE_PTR:
       if(val->nil_p()) {

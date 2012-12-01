@@ -19,6 +19,34 @@ class Module
   end
 end
 
+class Float
+  def __marshal__(ms)
+    if nan?
+      str = "nan"
+    elsif zero?
+      str = (1.0 / self) < 0 ? '-0' : '0'
+    elsif infinite?
+      str = self < 0 ? "-inf" : "inf"
+    else
+      s, decimal, sign, digits = dtoa
+
+      if decimal < -3 or decimal > digits
+        str = s.insert(1, ".") << "e#{decimal - 1}"
+      elsif decimal > 0
+        str = s[0, decimal]
+        digits -= decimal
+        str << ".#{s[decimal, digits]}" if digits > 0
+      else
+        str = "0."
+        str << "0" * -decimal if decimal != 0
+        str << s[0, digits]
+      end
+    end
+
+    Rubinius::Type.binary_string("f#{ms.serialize_integer(str.length)}#{str}")
+  end
+end
+
 module Marshal
   class State
     def serialize_encoding?(obj)
@@ -34,6 +62,41 @@ module Marshal
           :E.__marshal__(self) + true.__marshal__(self)
         else
           :encoding.__marshal__(self) + serialize_string(enc.name)
+      end
+    end
+
+    def set_object_encoding(obj, enc)
+      case obj
+      when String
+        obj.force_encoding enc
+      when Regexp
+        obj.source.force_encoding enc
+      when Symbol
+        # TODO
+      end
+    end
+
+    def set_instance_variables(obj)
+      construct_integer.times do
+        ivar = get_symbol
+        value = construct
+
+        case ivar
+        when :E
+          if value
+            set_object_encoding obj, Encoding::UTF_8
+          else
+            set_object_encoding obj, Encoding::US_ASCII
+          end
+          next
+        when :encoding
+          if enc = Encoding.find(value)
+            set_object_encoding obj, enc
+            next
+          end
+        end
+
+        obj.__instance_variable_set__ prepare_ivar(ivar), value
       end
     end
   end

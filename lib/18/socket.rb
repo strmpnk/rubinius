@@ -672,17 +672,7 @@ class Socket < BasicSocket
       end
     end
 
-    if type.kind_of? String
-      if type.prefix? "SOCK_"
-        begin
-          type = Socket::Constants.const_get(type)
-        rescue NameError
-          raise SocketError, "unknown socket type #{type}"
-        end
-      else
-        raise SocketError, "unknown socket type #{type}"
-      end
-    end
+    type = get_socket_type(type)
 
     FFI::MemoryPointer.new :int, 2 do |mp|
       Socket::Foreign.socketpair(domain, type, protocol, mp)
@@ -721,7 +711,8 @@ class Socket < BasicSocket
   end
 
   def initialize(family, socket_type, protocol)
-    descriptor = Socket::Foreign.socket family, socket_type, protocol
+    socket_type = self.class.get_socket_type(socket_type)
+    descriptor  = Socket::Foreign.socket family, socket_type, protocol
 
     Errno.handle 'socket(2)' if descriptor < 0
 
@@ -764,6 +755,24 @@ class Socket < BasicSocket
     end
 
     return status
+  end
+
+  def self.get_socket_type(type)
+    if type.kind_of? String
+      if type.prefix? "SOCK_"
+        begin
+          type = Socket::Constants.const_get(type)
+        rescue NameError
+          raise SocketError, "unknown socket type #{type}"
+        end
+      else
+        raise SocketError, "unknown socket type #{type}"
+      end
+    elsif !type.kind_of? Integer
+      raise Errno::EPROTONOSUPPORT, type.inspect
+    end
+
+    type
   end
 end
 
@@ -1027,8 +1036,14 @@ class TCPSocket < IPSocket
                 local_service = nil, server = false)
     status = nil
     syscall = nil
-    remote_host    = remote_host.to_s    if remote_host
-    remote_service = remote_service.to_s if remote_service
+    remote_host    = StringValue(remote_host)    if remote_host
+    if remote_service
+      if remote_service.kind_of? Fixnum
+        remote_service = remote_service.to_s
+      else
+        remote_service = StringValue(remote_service)
+      end
+    end
 
     flags = server ? Socket::AI_PASSIVE : 0
     @remote_addrinfo = Socket::Foreign.getaddrinfo(remote_host,

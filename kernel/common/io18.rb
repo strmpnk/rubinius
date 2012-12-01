@@ -1,8 +1,62 @@
 # -*- encoding: us-ascii -*-
 
 class IO
+
+  class InternalBuffer
+    alias_method :getchar, :getbyte
+  end
+
   def self.for_fd(fd, mode = nil)
     new fd, mode
+  end
+
+  def self.foreach(name, sep_string=$/)
+    return to_enum(:foreach, name, sep_string) unless block_given?
+
+    name = StringValue(name)
+
+    if name[0] == ?|
+      io = IO.popen(name[1..-1], "r")
+      return nil unless io
+    else
+      io = File.open(name, 'r')
+    end
+
+    if sep_string.nil?
+      sep = sep_string
+    else
+      sep = StringValue(sep_string)
+    end
+
+    saved_line = $_
+
+    begin
+      while line = io.gets(sep)
+        yield line
+      end
+    ensure
+      $_ = saved_line
+      io.close
+    end
+
+    return nil
+  end
+
+  def self.readlines(name, sep_string=$/)
+    name = StringValue name
+
+    if name[0] == ?|
+      io = IO.popen(name[1..-1], "r")
+      return nil unless io
+    else
+      io = File.open(name, 'r')
+    end
+
+    begin
+      io.readlines sep_string
+    ensure
+      io.close
+    end
   end
 
   ##
@@ -194,6 +248,40 @@ class IO
   end
 
   alias_method :each_line, :each
+
+  def each_char
+    return to_enum(:each_char) unless block_given?
+
+    ensure_open_and_readable
+    if Rubinius.kcode == :UTF8
+      # TODO zoinks. This is the slowest way possible to do this.
+      # We'll have to rewrite it.
+      lookup = 7.downto(4)
+      while c = read(1) do
+        n = c[0]
+        leftmost_zero_bit = lookup.find { |i| n[i] == 0 }
+
+        case leftmost_zero_bit
+        when 7 # ASCII
+          yield c
+        when 6 # UTF 8 complementary characters
+          next # Encoding error, ignore
+        else
+          more = read(6 - leftmost_zero_bit)
+          break unless more
+          yield c + more
+        end
+      end
+    else
+      while s = read(1)
+        yield s
+      end
+    end
+
+    self
+  end
+
+  alias_method :chars, :each_char
 
   ##
   # Reads the next ``line’’ from the I/O stream;
@@ -409,5 +497,12 @@ class IO
 
   def lines(*args)
     to_enum :each_line, *args
+  end
+
+  def ungetc(chr)
+    ensure_open
+
+    @ibuffer.put_back chr
+    nil
   end
 end

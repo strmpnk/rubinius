@@ -155,21 +155,6 @@ class Hash
   end
 end
 
-class Float
-  def __marshal__(ms)
-    str = if nan?
-            "nan"
-          elsif zero?
-            (1.0 / self) < 0 ? '-0' : '0'
-          elsif infinite?
-            self < 0 ? "-inf" : "inf"
-          else
-            ("%.*g" % [17, self]) + ms.serialize_mantissa(self)
-          end
-    Rubinius::Type.binary_string("f#{ms.serialize_integer(str.length)}#{str}")
-  end
-end
-
 module Unmarshalable
   def __marshal__(ms)
     raise TypeError, "marshaling is undefined for class #{self.class}"
@@ -739,25 +724,6 @@ module Marshal
       Rubinius::Type.binary_string(str)
     end
 
-    def serialize_mantissa(flt)
-      str = ""
-      flt = Math.modf(Math.ldexp(Math.frexp(flt.abs)[0], 37))[0]
-      if flt > 0
-        str = "\0" * 32
-        i = 0
-        while flt > 0
-          flt, n = Math.modf(Math.ldexp(flt, 32))
-          n = n.to_i
-          str[i += 1] = (n >> 24) & 0xff
-          str[i += 1] = (n >> 16) & 0xff
-          str[i += 1] = (n >> 8) & 0xff
-          str[i += 1] = (n & 0xff)
-        end
-        str.gsub!(/(\000)*\Z/, '')
-      end
-      Rubinius::Type.binary_string(str)
-    end
-
     def serializable_instance_variables(obj, exclude_ivars)
       ivars = obj.__instance_variables__
       ivars -= exclude_ivars if exclude_ivars
@@ -851,11 +817,12 @@ module Marshal
 
     def serialize_symbol(obj)
       str = obj.to_s
-      Rubinius::Type.binary_string(":#{serialize_integer(str.length)}#{str}")
+      Rubinius::Type.binary_string(":#{serialize_integer(str.bytesize)}#{str}")
     end
 
     def serialize_string(str)
-      Rubinius::Type.binary_string("\"#{serialize_integer(str.length)}#{str}")
+      output = Rubinius::Type.binary_string("\"#{serialize_integer(str.bytesize)}")
+      output + Rubinius::Type.binary_string(str.dup)
     end
 
     def serialize_user_class(obj, cls)
@@ -889,14 +856,6 @@ module Marshal
       cls = Rubinius::Type.object_class obj
       name = Rubinius::Type.module_inspect cls
       Rubinius::Type.binary_string("U#{serialize(name.to_sym)}#{val.__marshal__(self)}")
-    end
-
-    def set_instance_variables(obj)
-      construct_integer.times do
-        ivar = get_symbol
-        value = construct
-        obj.__instance_variable_set__ prepare_ivar(ivar), value
-      end
     end
 
     def store_unique_object(obj)

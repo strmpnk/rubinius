@@ -162,8 +162,10 @@ class IO
     end
 
     ##
-    # Returns one Fixnum as the start byte, used for #getc
-    def get_first
+    # Returns one Fixnum as the start byte.
+    def getbyte(io)
+      return if size == 0 and fill_from(io) == 0
+
       Rubinius.synchronize(self) do
         byte = @storage[@start]
         @start += 1
@@ -205,47 +207,6 @@ class IO
   attr_accessor :descriptor
   attr_accessor :mode
 
-  def self.foreach(name, sep_string = $/)
-    return to_enum(:foreach, name, sep_string) unless block_given?
-
-    name = StringValue(name)
-
-    if name[0] == ?|
-      io = IO.popen(name[1..-1], "r")
-      return nil unless io
-    else
-      io = File.open(name, 'r')
-    end
-
-    if sep_string.nil?
-      sep = sep_string
-    else
-      sep = StringValue(sep_string)
-    end
-
-    begin
-      while line = io.gets(sep)
-        yield line
-      end
-    ensure
-      io.close
-    end
-
-    return nil
-  end
-
-  ##
-  # Creates a new IO object to access the existing stream referenced by the
-  # descriptor given. The stream is not copied in any way so anything done on
-  # one IO will affect any other IOs accessing the same descriptor.
-  #
-  # The mode string given must be compatible with the original one so going
-  # 'r' from 'w' cannot be done but it is possible to go from 'w+' to 'r', for
-  # example (since the stream is not being "widened".)
-  #
-  # The initialization will verify that the descriptor given is a valid one.
-  # Errno::EBADF will be raised if that is not the case. If the mode is
-  # incompatible, it will raise Errno::EINVAL instead.
   def self.open(*args)
     io = new(*args)
 
@@ -311,30 +272,6 @@ class IO
     end
 
     ret
-  end
-
-  ##
-  # Reads the entire file specified by name as individual
-  # lines, and returns those lines in an array. Lines are
-  # separated by sep_string.
-  #
-  #  a = IO.readlines("testfile")
-  #  a[0]   #=> "This is line one\n"
-  def self.readlines(name, sep_string=$/)
-    name = StringValue name
-
-    if name[0] == ?|
-      io = IO.popen(name[1..-1], "r")
-      return nil unless io
-    else
-      io = File.open(name, 'r')
-    end
-
-    begin
-      io.readlines sep_string
-    ensure
-      io.close
-    end
   end
 
   #
@@ -483,14 +420,6 @@ class IO
     return self
   end
 
-  def bytes
-    to_enum :each_byte
-  end
-
-  def chars
-    to_enum :each_char
-  end
-
   ##
   # Closes the read end of a duplex I/O stream (i.e., one
   # that contains both a read and a write stream, such as
@@ -559,37 +488,7 @@ class IO
     self
   end
 
-  def each_char
-    return to_enum(:each_char) unless block_given?
-
-    ensure_open_and_readable
-    if Rubinius.kcode == :UTF8
-      # TODO zoinks. This is the slowest way possible to do this.
-      # We'll have to rewrite it.
-      lookup = 7.downto(4)
-      while c = read(1) do
-        n = c[0]
-        leftmost_zero_bit = lookup.find { |i| n[i] == 0 }
-
-        case leftmost_zero_bit
-        when 7 # ASCII
-          yield c
-        when 6 # UTF 8 complementary characters
-          next # Encoding error, ignore
-        else
-          more = read(6 - leftmost_zero_bit)
-          break unless more
-          yield c + more
-        end
-      end
-    else
-      while s = read(1)
-        yield s
-      end
-    end
-
-    self
-  end
+  alias_method :bytes, :each_byte
 
   ##
   # Set the pipe so it is at the end of the file
@@ -759,13 +658,7 @@ class IO
   def getc
     ensure_open
 
-    if @ibuffer.size == 0
-      if @ibuffer.fill_from(self) == 0
-        return nil
-      end
-    end
-
-    return @ibuffer.get_first
+    return @ibuffer.getchar(self)
   end
 
   ##
@@ -1267,25 +1160,6 @@ class IO
   alias_method :prim_write, :write
   alias_method :prim_close, :close
 
-  ##
-  # Pushes back one character (passed as a parameter) onto ios,
-  # such that a subsequent buffered read will return it. Only one
-  # character may be pushed back before a subsequent read operation
-  # (that is, you will be able to read only the last of several
-  # characters that have been pushed back). Has no effect with
-  # unbuffered reads (such as IO#sysread).
-  #
-  #  f = File.new("testfile")   #=> #<File:testfile>
-  #  c = f.getc                 #=> 84
-  #  f.ungetc(c)                #=> nil
-  #  f.getc                     #=> 84
-  def ungetc(chr)
-    ensure_open
-
-    @ibuffer.put_back chr
-    nil
-  end
-
   def write(data)
     data = String data
     return 0 if data.length == 0
@@ -1336,7 +1210,11 @@ class IO
     end
 
     if @pid and @pid != 0
-      Process.wait @pid
+      begin
+        Process.wait @pid
+      rescue Errno::ECHILD
+        # If the child already exited
+      end
       @pid = nil
     end
 

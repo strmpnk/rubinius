@@ -5,6 +5,7 @@
 #include "builtin/string.hpp"
 #include "builtin/array.hpp"
 #include "builtin/bytearray.hpp"
+#include "builtin/character.hpp"
 #include "builtin/class.hpp"
 #include "builtin/encoding.hpp"
 #include "builtin/exception.hpp"
@@ -584,7 +585,7 @@ namespace rubinius {
       if(byte_compatible_p(encoding_)) {
         num_chars(state, num_bytes_);
       } else {
-        OnigEncodingType* enc = encoding_->get_encoding();
+        OnigEncodingType* enc = encoding(state)->get_encoding();
         native_int chars;
 
         if(fixed_width_p(encoding_)) {
@@ -793,15 +794,22 @@ namespace rubinius {
     }
 
     native_int new_size = current_size + length;
-    native_int capacity = data_size == 0 ? 2 : data_size;
+    native_int capacity = data_size;
 
     if(capacity <= new_size) {
+      if (new_size >= INT32_MAX) {
+        Exception::argument_error(state, "string sizes too big");
+      }
       // capacity needs one extra byte of room for the trailing null
+      if(capacity == 0) capacity = 2;
       do {
         // @todo growth should be more intelligent than doubling
         capacity *= 2;
       } while(capacity < new_size + 1);
 
+      if (capacity >= INT32_MAX) {
+        capacity = INT32_MAX - 1;
+      }
       // No need to call unshare and duplicate a ByteArray
       // just to throw it away.
       if(shared_ == cTrue) shared(state, cFalse);
@@ -1095,6 +1103,8 @@ namespace rubinius {
     free(output);
 
     infect(state, result);
+    result->encoding(state, encoding());
+
     return result;
   }
 
@@ -1177,9 +1187,13 @@ namespace rubinius {
 
     native_int cnt = size->to_native();
 
+    Encoding* enc = 0;
+
     if(Fixnum* chr = try_as<Fixnum>(pattern)) {
       memset(s->byte_address(), (int)chr->to_native(), cnt);
+      enc = Encoding::ascii8bit_encoding(state);
     } else if(String* pat = try_as<String>(pattern)) {
+      enc = pat->encoding();
       pat->infect(state, s);
 
       native_int psz = pat->byte_size();
@@ -1201,6 +1215,8 @@ namespace rubinius {
     } else {
       Exception::argument_error(state, "pattern must be a Fixnum or String");
     }
+
+    s->encoding(state, enc);
 
     return s;
   }
@@ -1281,12 +1297,12 @@ namespace rubinius {
     if(byte_compatible_p(encoding_)) {
       return start + index;
     } else if(fixed_width_p(encoding_)) {
-      return start + index * ONIGENC_MBC_MINLEN(encoding_->get_encoding());
+      return start + index * ONIGENC_MBC_MINLEN(encoding(state)->get_encoding());
     } else {
       native_int offset = Encoding::find_character_byte_index(byte_address() + start,
                                                  byte_address() + byte_size(),
                                                  index,
-                                                 encoding_->get_encoding());
+                                                 encoding(state)->get_encoding());
       return start + offset;
     }
   }
@@ -1301,12 +1317,12 @@ namespace rubinius {
     if(byte_compatible_p(encoding_)) {
       return index;
     } else if(fixed_width_p(encoding_)) {
-      return index / ONIGENC_MBC_MINLEN(encoding_->get_encoding());
+      return index / ONIGENC_MBC_MINLEN(encoding(state)->get_encoding());
     } else {
       return Encoding::find_byte_character_index(byte_address() + start,
                                                  byte_address() + byte_size(),
                                                  index,
-                                                 encoding_->get_encoding());
+                                                 encoding(state)->get_encoding());
     }
   }
 
@@ -1356,7 +1372,7 @@ namespace rubinius {
     native_int e = find_character_byte_index(state, length - 1, i);
 
     int c = Encoding::precise_mbclen(byte_address() + e, byte_address() + byte_size(),
-                                     encoding_->get_encoding());
+                                     encoding(state)->get_encoding());
 
     if(ONIGENC_MBCLEN_CHARFOUND_P(c)) {
       e += ONIGENC_MBCLEN_CHARFOUND_LEN(c);
@@ -1511,6 +1527,84 @@ namespace rubinius {
     }
   }
 
+  Fixnum* String::byteindex(STATE, Object* value, Fixnum* start) {
+    native_int total = byte_size();
+    native_int offset = start->to_native();
+
+    if(String* pattern = try_as<String>(value)) {
+      native_int match_size = pattern->byte_size();
+
+      if(offset < 0) {
+        Exception::argument_error(state, "negative start given");
+      }
+
+      if(match_size == 0) return start;
+
+      if(!CBOOL(pattern->valid_encoding_p(state))) return nil<Fixnum>();
+
+      Encoding* encoding = Encoding::compatible_p(state, this, pattern);
+      if(encoding->nil_p()) {
+        Exception::argument_error(state, "encodings are incompatible");
+      }
+
+      OnigEncodingType* enc = encoding->get_encoding();
+      uint8_t* p = byte_address() + offset;
+      uint8_t* e = byte_address() + total;
+      uint8_t* pp = pattern->byte_address();
+      uint8_t* pe = pp + pattern->byte_size();
+      uint8_t* s;
+      uint8_t* ss;
+
+      for(s = p, ss = pp; p < e; s = ++p) {
+        if(*p != *pp) continue;
+
+        while(p < e && pp < pe && *(++p) == *(++pp))
+          ; // memcmp
+
+        if(pp < pe) {
+          p = s;
+          pp = ss;
+        } else {
+          int c = Encoding::precise_mbclen(s, e, enc);
+
+          if(ONIGENC_MBCLEN_CHARFOUND_P(c)) {
+            return Fixnum::from(s - byte_address());
+          } else {
+            return nil<Fixnum>();
+          }
+        }
+      }
+
+      return nil<Fixnum>();
+    } else if(Fixnum* index = try_as<Fixnum>(value)) {
+      OnigEncodingType* enc = encoding(state)->get_encoding();
+      uint8_t* p = byte_address();
+      uint8_t* e = p + total;
+      native_int i, k = index->to_native();
+
+      if(k < 0) {
+        Exception::argument_error(state, "character index is negative");
+      }
+
+      for(i = 0; i < k && p < e; i++) {
+        int c = Encoding::precise_mbclen(p, e, enc);
+
+        if(!ONIGENC_MBCLEN_CHARFOUND_P(c)) return nil<Fixnum>();
+
+        p += ONIGENC_MBCLEN_CHARFOUND_LEN(c);
+      }
+
+      if(i < k) {
+        return nil<Fixnum>();
+      } else {
+        return Fixnum::from(p - byte_address());
+      }
+    }
+
+    Exception::argument_error(state, "argument is not a String or Fixnum");
+    return nil<Fixnum>(); // satisfy compiler
+  }
+
   OnigEncodingType* String::get_encoding_kcode_fallback(STATE) {
     if(!LANGUAGE_18_ENABLED(state)) {
       if(!encoding_->nil_p()) {
@@ -1544,6 +1638,10 @@ namespace rubinius {
 
     if(ONIGENC_MBC_MAXLEN(enc) == 1) {
       output = String::create(state, reinterpret_cast<const char*>(cur), 1);
+    } else if(LANGUAGE_18_ENABLED(state)) {
+      kcode::table* kcode_tbl = state->shared().kcode_table();
+      int len = kcode::mbclen(kcode_tbl, *cur);
+      output = String::create(state, reinterpret_cast<const char*>(cur), len);
     } else {
       int clen = Encoding::precise_mbclen(cur, cur + ONIGENC_MBC_MAXLEN(enc), enc);
       if(ONIGENC_MBCLEN_CHARFOUND_P(clen)) {
@@ -1642,7 +1740,7 @@ namespace rubinius {
         return valid_encoding_;
       }
 
-      OnigEncodingType* enc = encoding_->get_encoding();
+      OnigEncodingType* enc = encoding(state)->get_encoding();
 
       uint8_t* p = byte_address();
       uint8_t* e = p + byte_size();
@@ -1664,48 +1762,35 @@ namespace rubinius {
     return valid_encoding_;
   }
 
-  Fixnum* String::codepoint(STATE) {
-    if(char_size(state) == 0) return force_as<Fixnum>(Primitives::failure());
+  int String::codepoint(STATE, bool* found) {
+    OnigEncodingType* enc = encoding(state)->get_encoding();
+    uint8_t* p = byte_address();
+    uint8_t* e = p + byte_size();
 
-    if(byte_compatible_p(encoding_)) {
-      return Fixnum::from(byte_address()[0]);
+    int n = Encoding::precise_mbclen(p, e, enc);
+
+    if(ONIGENC_MBCLEN_CHARFOUND_P(n)) {
+      *found = true;
+      return ONIGENC_MBC_TO_CODE(enc, (UChar*)p, (UChar*)e);
     } else {
-      OnigEncodingType* enc = encoding_->get_encoding();
-      uint8_t* p = byte_address();
-      uint8_t* e = p + byte_size();
-
-      int n = Encoding::precise_mbclen(p, e, enc);
-
-      if(ONIGENC_MBCLEN_CHARFOUND_P(n)) {
-        return Fixnum::from(ONIGENC_MBC_TO_CODE(enc, (UChar*)p, (UChar*)e));
-      }
+      *found = false;
+      return 0;
     }
+  }
 
-    return force_as<Fixnum>(Primitives::failure());
+  Fixnum* String::codepoint(STATE) {
+    bool found;
+    int c = codepoint(state, &found);
+
+    if(!found) {
+      return force_as<Fixnum>(Primitives::failure());
+    } else {
+      return Fixnum::from(c);
+    }
   }
 
   Object* String::chr_at(STATE, Fixnum* byte) {
-    native_int i = byte->to_native();
-    native_int size = byte_size();
-    int n = 1;
-
-    if(i < 0 || i >= size) return cNil;
-
-    if(!byte_compatible_p(encoding_)) {
-      OnigEncodingType* enc = encoding_->get_encoding();
-      uint8_t* p = byte_address() + i;
-      uint8_t* e = byte_address() + byte_size();
-
-      int c = Encoding::precise_mbclen(p, e, enc);
-
-      if(ONIGENC_MBCLEN_CHARFOUND_P(c)) {
-        n = ONIGENC_MBCLEN_CHARFOUND_LEN(c);
-      } else {
-        return cNil;
-      }
-    }
-
-    return byte_substring(state, i, n);
+    return Character::create_from(state, this, byte);
   }
 
   void String::Info::show(STATE, Object* self, int level) {

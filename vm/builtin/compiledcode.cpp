@@ -131,18 +131,19 @@ namespace rubinius {
 
       mcode = new MachineCode(state, self);
 
+      if(self->resolve_primitive(state)) {
+        mcode->fallback = execute;
+      } else {
+        mcode->setup_argument_handler();
+      }
+
       // We need to have an explicit memory barrier here, because we need to
       // be sure that mcode is completely initialized before it's set.
       // Otherwise another thread might see a partially initialized
       // MachineCode.
       atomic::write(&self->machine_code_, mcode);
 
-      if(self->resolve_primitive(state)) {
-        mcode->fallback = execute;
-      } else {
-        mcode->setup_argument_handler(self);
-      }
-
+      set_executor(mcode->fallback);
     }
 
     self->hard_unlock(state, gct);
@@ -407,12 +408,12 @@ namespace rubinius {
     for(size_t i = 0; i < mcode->inline_cache_count(); i++) {
       InlineCache* cache = &mcode->caches[i];
 
-      for(int i = 0; i < cTrackedICHits; ++i) {
-        MethodCacheEntry* mce = cache->cache_[i].entry();
+      for(int j = 0; j < cTrackedICHits; ++j) {
+        MethodCacheEntry* mce = cache->cache_[j].entry();
         if(mce) {
           tmp = mark.call(mce);
           if(tmp) {
-            cache->cache_[i].assign((MethodCacheEntry*)tmp);
+            cache->cache_[j].assign(reinterpret_cast<MethodCacheEntry*>(tmp));
             mark.just_set(obj, tmp);
           }
         }
@@ -421,7 +422,7 @@ namespace rubinius {
       if(cache->call_unit_) {
         tmp = mark.call(cache->call_unit_);
         if(tmp) {
-          cache->call_unit_ = (CallUnit*)tmp;
+          cache->call_unit_ = reinterpret_cast<CallUnit*>(tmp);
           mark.just_set(obj, tmp);
         }
       }

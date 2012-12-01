@@ -338,7 +338,11 @@ time64_t mktime64(struct tm64* tm64) {
 }
 
 time64_t timelocal64(struct tm64* tm64) {
+#ifdef __OpenBSD__
+  return timestamp64(timelocal, tm64);
+#else
   return timestamp64(mktime, tm64);
+#endif
 }
 
 time64_t timegm64(struct tm64* tm64) {
@@ -355,6 +359,8 @@ struct tm64* gmtime64_r(const time64_t* time64, struct tm64* tm64) {
 
     if(gmtime_r(&time, &tm)) {
       tm_to_tm64(&tm, tm64);
+      /* Always set to UTC even if the platform returns GMT (eg: Linux) */
+      tm64->tm_zone = (char *)"UTC";
       return tm64;
     }
   }

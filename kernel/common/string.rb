@@ -70,7 +70,7 @@ class String
 
   def +(other)
     other = StringValue(other)
-    Rubinius::Type.check_encoding_compatible self, other
+    Rubinius::Type.compatible_encoding self, other
     String.new(self) << other
   end
 
@@ -214,10 +214,6 @@ class String
 
     return 0 if order == 0
     return order < 0 ? -1 : 1
-  end
-
-  def center(width, padstr = " ")
-    justify width, :center, padstr
   end
 
   def chomp(separator=$/)
@@ -449,14 +445,6 @@ class String
   ControlCharacters = [10, 9, 7, 11, 12, 13, 27, 8]
   ControlPrintValue = ["\\n", "\\t", "\\a", "\\v", "\\f", "\\r", "\\e", "\\b"]
 
-  def inspect
-    "\"#{transform(Rubinius::CType::Printed, true)}\""
-  end
-
-  def ljust(width, padstr=" ")
-    justify(width, :left, padstr)
-  end
-
   def lstrip
     str = dup
     str.lstrip! || str
@@ -572,10 +560,6 @@ class String
       # Nothing worked out, this is the default.
       return ["", "", self]
     end
-  end
-
-  def rjust(width, padstr = " ")
-    justify(width, :right, padstr)
   end
 
   def rstrip
@@ -1008,43 +992,6 @@ class String
     raise PrimitiveFailure, "String#tr_expand primitive failed"
   end
 
-  def justify(width, direction, padstr=" ")
-    padstr = StringValue(padstr)
-    raise ArgumentError, "zero width padding" if padstr.size == 0
-
-    width = Rubinius::Type.coerce_to width, Fixnum, :to_int
-    if width > @num_bytes
-      padsize = width - @num_bytes
-    else
-      return dup
-    end
-
-    str = self.class.pattern(1, "\0") * (padsize + @num_bytes)
-    str.taint if tainted? or padstr.tainted?
-
-    case direction
-    when :right
-      pad = String.pattern padsize, padstr
-      str.copy_from pad, 0, padsize, 0
-      str.copy_from self, 0, @num_bytes, padsize
-    when :left
-      pad = String.pattern padsize, padstr
-      str.copy_from self, 0, @num_bytes, 0
-      str.copy_from pad, 0, padsize, @num_bytes
-    when :center
-      half = padsize / 2.0
-      lsize = half.floor
-      rsize = half.ceil
-      lpad = String.pattern lsize, padstr
-      rpad = String.pattern rsize, padstr
-      str.copy_from lpad, 0, lsize, 0
-      str.copy_from self, 0, @num_bytes, lsize
-      str.copy_from rpad, 0, rsize, lsize + @num_bytes
-    end
-
-    str
-  end
-
   # Unshares shared strings.
   def modify!
     Rubinius.check_frozen
@@ -1086,9 +1033,9 @@ class String
       capture += match.size
     end
 
-    start  = match.begin(capture)
-    length = match.end(capture) - start
-    splice! start, length, replacement
+    bi = byteindex match.begin(capture)
+    bs = byteindex(match.end(capture)) - bi
+    splice! bi, bs, replacement
   end
 
   def splice!(start, count, replacement)
@@ -1111,7 +1058,7 @@ class String
     # Clamp count to the end of the string
     count = @num_bytes - start if start + count > @num_bytes
 
-    rsize = replacement.size
+    rsize = replacement.bytesize
 
     if rsize == 0
       trailer_start = start + count

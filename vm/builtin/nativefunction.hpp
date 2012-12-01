@@ -18,6 +18,7 @@ namespace rubinius {
     Symbol* name_;         // slot
     Symbol* file_;         // slot
     Fixnum* required_;     // slot
+    Object* varargs_;      // slot
 
   public:
     FFIData* ffi_data;
@@ -27,6 +28,7 @@ namespace rubinius {
     attr_accessor(name, Symbol);
     attr_accessor(file, Symbol);
     attr_accessor(required, Fixnum);
+    attr_accessor(varargs, Object);
 
     /* interface */
 
@@ -47,6 +49,9 @@ namespace rubinius {
     static Array* generate_tramp(STATE, Object* obj, Symbol* name, Array* args, Object* ret);
 
     static Pointer* adjust_tramp(STATE, Object* obj, NativeFunction* orig);
+
+    static bool ffi_arg_info(STATE, Object* type, FFIArgInfo* info);
+    static ffi_type* ffi_type_info(FFIArgInfo* info);
 
     void prep(STATE, int arg_count, FFIArgInfo* args, FFIArgInfo* ret);
     Object* call(STATE, Arguments& args, CallFrame* call_frame);
@@ -69,6 +74,7 @@ namespace rubinius {
   public:
     ffi_cif cif;
     ffi_closure* closure;
+    SharedState* shared;
     Object* callable;
     NativeFunction* function;
     FFIArgInfo* args_info;
@@ -77,12 +83,12 @@ namespace rubinius {
     size_t arg_count;
     void *ep;
 
-    FFIData(NativeFunction* func,  int count, FFIArgInfo* args, FFIArgInfo* ret);
+    FFIData(STATE, NativeFunction* func,  int count, FFIArgInfo* args, FFIArgInfo* ret);
 
     virtual ~FFIData();
     void cleanup(State* state, CodeManager* cm) { }
 
-    static FFIData* create(NativeFunction* func, int count, FFIArgInfo* args, FFIArgInfo* ret);
+    static FFIData* create(STATE, NativeFunction* func, int count, FFIArgInfo* args, FFIArgInfo* ret);
   };
 
 }

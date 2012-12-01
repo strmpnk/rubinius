@@ -184,19 +184,18 @@ namespace rubinius {
                                        CallFrame* const call_frame,
                                        int sp,
                                        InterpreterState& is,
-                                       int current_unwind,
-                                       UnwindInfo* unwinds);
+                                       UnwindInfoSet& unwinds);
 
     static Object* uncommon_interpreter(STATE, MachineCode* const mcode,
       CallFrame* const call_frame, int32_t entry_ip, native_int sp,
       CallFrame* const method_call_frame, jit::RuntimeDataHolder* rd,
-      int32_t unwind_count, int32_t* unwinds);
+      UnwindInfoSet& unwinds);
 
     static Object* tooling_interpreter(STATE,
                                        MachineCode* const mcode,
                                        InterpreterCallFrame* const call_frame);
 
-    void setup_argument_handler(CompiledCode* meth);
+    void setup_argument_handler();
 
     bool validate_ip(STATE, size_t ip);
 

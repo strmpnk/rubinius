@@ -82,7 +82,7 @@ namespace jit {
       for(int i = 0; i < size; i++) {
         Value* idx[] = {
           cint(0),
-          cint(offset::vars_tuple),
+          cint(offset::StackVariables::locals),
           cint(i)
         };
 
@@ -107,7 +107,7 @@ namespace jit {
     Value* cur = b().CreateLoad(info_.counter(), "counter");
     Value* idx[] = {
       cint(0),
-      cint(offset::vars_tuple),
+      cint(offset::StackVariables::locals),
       cur
     };
 
@@ -138,7 +138,7 @@ namespace jit {
     // Now, validate class_id
 
     Value* self = b().CreateLoad(
-        b().CreateConstGEP2_32(info_.args(), 0, offset::args_recv), "self");
+        b().CreateConstGEP2_32(info_.args(), 0, offset::Arguments::recv), "self");
 
     BasicBlock* restart_interp = info_.new_block("restart_interp");
     BasicBlock* check_class = info_.new_block("check_class");
@@ -514,7 +514,7 @@ namespace jit {
     if(info_.inline_policy) {
       visitor.set_policy(info_.inline_policy);
     } else {
-      visitor.init_policy();
+      visitor.init_policy(ls_);
     }
 
     assert(visitor.inline_policy());
@@ -552,8 +552,8 @@ namespace jit {
       sig << "CallFrame";
 
       Function* func_ci = sig.function("rbx_check_interrupts");
-      func_ci->setDoesNotCapture(1, true);
-      func_ci->setDoesNotCapture(2, true);
+      func_ci->setDoesNotCapture(1);
+      func_ci->setDoesNotCapture(2);
 
       Value* call_args[] = { info_.vm(), call_frame };
 

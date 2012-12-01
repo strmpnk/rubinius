@@ -895,7 +895,7 @@ namespace bert {
 
     Value* new_dict() {
       Term* list = tzr_.next_term();
-      if(!list->type() == Term::List) {
+      if(list->type() != Term::List) {
         delete list;
         return new_invalid();
       }
@@ -1098,7 +1098,7 @@ namespace bert {
 
       for(ValueList::iterator i = val->elements()->begin();
           i != val->elements()->end();
-          i++) {
+          ++i) {
         write_value(*i);
       }
     }

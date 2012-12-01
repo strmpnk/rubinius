@@ -64,7 +64,7 @@ using namespace rubinius;
 
 #define JUMP_DEBUGGING \
   return MachineCode::debugger_interpreter_continue(state, mcode, call_frame, \
-         stack_calculate_sp(), is, current_unwind, unwinds)
+         stack_calculate_sp(), is, unwinds)
 
 #define CHECK_AND_PUSH(val) \
    if(val == NULL) { goto exception; } \
@@ -94,8 +94,7 @@ Object* MachineCode::interpreter(STATE,
 
   Object** stack_ptr = call_frame->stk - 1;
 
-  int current_unwind = 0;
-  UnwindInfo unwinds[kMaxUnwindInfos];
+  UnwindInfoSet unwinds;
 
 continue_to_run:
   try {
@@ -137,11 +136,11 @@ exception:
   //
   switch(th->raise_reason()) {
   case cException:
-    if(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
-      call_frame->set_ip(info->target_ip);
-      cache_ip(info->target_ip);
+    if(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
+      call_frame->set_ip(info.target_ip);
+      cache_ip(info.target_ip);
       goto continue_to_run;
     } else {
       call_frame->scope->flush_to_heap(state);
@@ -164,12 +163,12 @@ exception:
   case cThreadKill:
     // Otherwise, we're doing a long return/break unwind through
     // here. We need to run ensure blocks.
-    while(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      if(info->for_ensure()) {
-        stack_position(info->stack_depth);
-        call_frame->set_ip(info->target_ip);
-        cache_ip(info->target_ip);
+    while(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      if(info.for_ensure()) {
+        stack_position(info.stack_depth);
+        call_frame->set_ip(info.target_ip);
+        cache_ip(info.target_ip);
 
         // Don't reset ep here, we're still handling the return/break.
         goto continue_to_run;
@@ -214,8 +213,7 @@ Object* MachineCode::uncommon_interpreter(STATE,
                                           native_int sp,
                                           CallFrame* const method_call_frame,
                                           jit::RuntimeDataHolder* rd,
-                                          int32_t unwind_count,
-                                          int32_t* input_unwinds)
+                                          UnwindInfoSet& thread_unwinds)
 {
 
   MachineCode* mc = method_call_frame->compiled_code->machine_code();
@@ -241,16 +239,7 @@ Object* MachineCode::uncommon_interpreter(STATE,
 
   Object** stack_ptr = call_frame->stk + sp;
 
-  int current_unwind = unwind_count;
-  UnwindInfo unwinds[kMaxUnwindInfos];
-
-  for(int i = 0, j = 0; j < unwind_count; i += 3, j++) {
-    UnwindInfo& uw = unwinds[j];
-    uw.target_ip = input_unwinds[i];
-    uw.stack_depth = input_unwinds[i + 1];
-    uw.type = (UnwindType)input_unwinds[i + 2];
-  }
-
+  UnwindInfoSet unwinds(thread_unwinds);
 continue_to_run:
   try {
 
@@ -291,11 +280,11 @@ exception:
   //
   switch(th->raise_reason()) {
   case cException:
-    if(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
-      call_frame->set_ip(info->target_ip);
-      cache_ip(info->target_ip);
+    if(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
+      call_frame->set_ip(info.target_ip);
+      cache_ip(info.target_ip);
       goto continue_to_run;
     } else {
       call_frame->scope->flush_to_heap(state);
@@ -318,12 +307,12 @@ exception:
   case cThreadKill:
     // Otherwise, we're doing a long return/break unwind through
     // here. We need to run ensure blocks.
-    while(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      if(info->for_ensure()) {
-        stack_position(info->stack_depth);
-        call_frame->set_ip(info->target_ip);
-        cache_ip(info->target_ip);
+    while(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      if(info.for_ensure()) {
+        stack_position(info.stack_depth);
+        call_frame->set_ip(info.target_ip);
+        cache_ip(info.target_ip);
 
         // Don't reset ep here, we're still handling the return/break.
         goto continue_to_run;
@@ -382,8 +371,7 @@ Object* MachineCode::debugger_interpreter(STATE,
   InterpreterState is;
   GCTokenImpl gct;
 
-  int current_unwind = 0;
-  UnwindInfo unwinds[kMaxUnwindInfos];
+  UnwindInfoSet unwinds;
 
   // TODO: ug, cut and paste of the whole interpreter above. Needs to be fast,
   // maybe could use a function template?
@@ -438,11 +426,11 @@ exception:
   //
   switch(th->raise_reason()) {
   case cException:
-    if(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
-      call_frame->set_ip(info->target_ip);
-      cache_ip(info->target_ip);
+    if(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
+      call_frame->set_ip(info.target_ip);
+      cache_ip(info.target_ip);
       goto continue_to_run;
     } else {
       call_frame->scope->flush_to_heap(state);
@@ -465,14 +453,14 @@ exception:
   case cThreadKill:
     // Otherwise, we're doing a long return/break unwind through
     // here. We need to run ensure blocks.
-    while(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
+    while(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
 
-      if(info->for_ensure()) {
-        stack_position(info->stack_depth);
-        call_frame->set_ip(info->target_ip);
-        cache_ip(info->target_ip);
+      if(info.for_ensure()) {
+        stack_position(info.stack_depth);
+        call_frame->set_ip(info.target_ip);
+        cache_ip(info.target_ip);
 
         // Don't reset ep here, we're still handling the return/break.
         goto continue_to_run;
@@ -515,8 +503,7 @@ Object* MachineCode::debugger_interpreter_continue(STATE,
                                                    CallFrame* const call_frame,
                                                    int sp,
                                                    InterpreterState& is,
-                                                   int current_unwind,
-                                                   UnwindInfo* unwinds)
+                                                   UnwindInfoSet& thread_unwinds)
 {
 
 #include "vm/gen/instruction_locations.hpp"
@@ -526,6 +513,7 @@ Object* MachineCode::debugger_interpreter_continue(STATE,
 
   Object** stack_ptr = call_frame->stk + sp;
 
+  UnwindInfoSet unwinds(thread_unwinds);
 continue_to_run:
   try {
 
@@ -570,11 +558,11 @@ exception:
   //
   switch(th->raise_reason()) {
   case cException:
-    if(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
-      call_frame->set_ip(info->target_ip);
-      cache_ip(info->target_ip);
+    if(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
+      call_frame->set_ip(info.target_ip);
+      cache_ip(info.target_ip);
       goto continue_to_run;
     } else {
       call_frame->scope->flush_to_heap(state);
@@ -597,12 +585,12 @@ exception:
   case cThreadKill:
     // Otherwise, we're doing a long return/break unwind through
     // here. We need to run ensure blocks.
-    while(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      if(info->for_ensure()) {
-        stack_position(info->stack_depth);
-        call_frame->set_ip(info->target_ip);
-        cache_ip(info->target_ip);
+    while(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      if(info.for_ensure()) {
+        stack_position(info.stack_depth);
+        call_frame->set_ip(info.target_ip);
+        cache_ip(info.target_ip);
 
         // Don't reset ep here, we're still handling the return/break.
         goto continue_to_run;
@@ -655,8 +643,7 @@ Object* MachineCode::tooling_interpreter(STATE,
   InterpreterState is;
   GCTokenImpl gct;
 
-  int current_unwind = 0;
-  UnwindInfo unwinds[kMaxUnwindInfos];
+  UnwindInfoSet unwinds;
 
   Object** stack_ptr = call_frame->stk - 1;
 
@@ -703,11 +690,11 @@ exception:
   //
   switch(th->raise_reason()) {
   case cException:
-    if(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
-      call_frame->set_ip(info->target_ip);
-      cache_ip(info->target_ip);
+    if(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
+      call_frame->set_ip(info.target_ip);
+      cache_ip(info.target_ip);
       goto continue_to_run;
     } else {
       call_frame->scope->flush_to_heap(state);
@@ -729,14 +716,14 @@ exception:
   case cCatchThrow:
     // Otherwise, we're doing a long return/break unwind through
     // here. We need to run ensure blocks.
-    while(current_unwind > 0) {
-      UnwindInfo* info = &unwinds[--current_unwind];
-      stack_position(info->stack_depth);
+    while(unwinds.has_unwinds()) {
+      UnwindInfo info = unwinds.pop();
+      stack_position(info.stack_depth);
 
-      if(info->for_ensure()) {
-        stack_position(info->stack_depth);
-        call_frame->set_ip(info->target_ip);
-        cache_ip(info->target_ip);
+      if(info.for_ensure()) {
+        stack_position(info.stack_depth);
+        call_frame->set_ip(info.target_ip);
+        cache_ip(info.target_ip);
 
         // Don't reset ep here, we're still handling the return/break.
         goto continue_to_run;
